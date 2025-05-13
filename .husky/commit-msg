@@ -1,0 +1,52 @@
+#!/usr/bin/env sh
+set -e
+
+# Cores para feedback visual
+NC='\033[0m'         # Sem cor
+BBlue='\033[1;34m'   # Azul negrito
+BRed='\033[1;31m'    # Vermelho negrito
+BGreen='\033[1;32m'  # Verde negrito
+
+# Definição do padrão regex para o ID da issue
+REGEX_ISSUE_ID="[a-zA-Z0-9,\.\_\-]+-[0-9]+"
+
+# Obtém o nome da branch atual
+BRANCH_NAME=$(git symbolic-ref --short HEAD 2>/dev/null || echo "")
+
+if [ -z "$BRANCH_NAME" ]; then
+    echo -e "${BRed}Erro ao obter o nome da branch atual.${NC}"
+    echo -e "${BBlue}Você pode usar ${BRed}git commit -m \"sua mensagem\" --no-verify${BBlue} para ignorar este hook.${NC}"
+    exit 1
+fi
+
+# Extrai o ID da issue do nome da branch
+ISSUE_ID=$(echo "$BRANCH_NAME" | grep -o -E "$REGEX_ISSUE_ID" | head -1 || echo "")
+
+if [ -z "$ISSUE_ID" ]; then
+    echo -e "${BRed}ERRO: A branch não possui o código de identificação no formato adequado.${NC}"
+    echo -e "${BBlue}O nome da branch deve conter um identificador no formato 'projeto-123'.${NC}"
+    echo -e "${BBlue}Branch atual: ${BRed}$BRANCH_NAME${NC}"
+    echo -e "${BBlue}Para ignorar esta verificação: ${BRed}git commit -m \"sua mensagem\" --no-verify${NC}"
+    exit 1
+fi
+
+# Converter o ID para maiúsculas
+PREFIX=$(echo "$ISSUE_ID" | tr '[:lower:]' '[:upper:]')
+
+# Verifica se o arquivo da mensagem existe
+if [ ! -f "$1" ]; then
+    echo -e "${BRed}ERRO: Arquivo de mensagem de commit não encontrado.${NC}"
+    exit 1
+fi
+
+# Lê a mensagem de commit atual
+COMMIT_MSG=$(cat "$1")
+
+# Verifica se a mensagem já começa com o ID (para evitar duplicação)
+if echo "$COMMIT_MSG" | grep -q "^$PREFIX: "; then
+    echo -e "${BGreen}ID da issue já presente na mensagem de commit. Mantendo como está.${NC}"
+else
+    # Adiciona o prefixo à mensagem de commit
+    echo "$PREFIX: $COMMIT_MSG" > "$1"
+    echo -e "${BGreen}ID da issue ${PREFIX} adicionado à mensagem de commit.${NC}"
+fi
