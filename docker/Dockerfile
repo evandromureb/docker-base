@@ -22,5 +22,7 @@ RUN chmod +x /entrypoint.sh
 
 WORKDIR /var/www
 
+COPY . .
 ENTRYPOINT ["/entrypoint.sh"]
+
 CMD ["php-fpm"]

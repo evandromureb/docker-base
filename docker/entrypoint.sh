@@ -1,6 +1,15 @@
 #!/bin/bash
 set -e
 
+echo "Executando composer install em $(pwd)"
+ls -la
+composer install --no-interaction --prefer-dist
+
+# Instala dependências Node.js
+if [ -f package.json ]; then
+  npm install
+fi
+
 # Copia .env.example para .env se não existir
 if [ ! -f .env ]; then
     cp .env.example .env
@@ -11,13 +20,7 @@ if ! grep -q '^APP_KEY=.\+' .env; then
     php artisan key:generate
 fi
 
-# Instala dependências PHP
-composer install --no-interaction --prefer-dist
 
-# Instala dependências Node.js
-if [ -f package.json ]; then
-  npm install
-fi
 
 # Permissões para storage e bootstrap/cache
 chown -R www-data:www-data storage bootstrap/cache
