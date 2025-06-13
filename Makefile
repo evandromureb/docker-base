@@ -1,7 +1,7 @@
 up:
 	docker compose up -d
 
-upd:
+upb:
 	docker compose up -d --build
 
 down:
