@@ -12,10 +12,26 @@ Projeto em PHP com suporte a Composer, NPM, MySQL, Nginx e Mailpit via Docker.
 
 Clone o repositório e utilize os comandos abaixo para gerenciar o ambiente:
 
+### 1. Instalação
+- `git clone git@github.com:evandromureb/docker-base.git`
+- `cd docker-base`
+- `cp .env.example .env`
+- `composer install`
+  Instale as dependências do Composer.
+- `npm install`  
+  Instale as dependências do NPM.
+- `php artisan key:generate`
+- `make upb`
+  Realize o build do container.
+- `make migrate`  
+  Execute as migrations do Laravel (se aplicável).
+
 ### Comandos principais (`Makefile`)
 
 - `make up`  
   Sobe os containers em modo detach.
+- `make upb`  
+  Sobe os containers em modo build.
 
 - `make down`  
   Para e remove os containers.
