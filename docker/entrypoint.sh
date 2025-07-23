@@ -25,9 +25,11 @@ fi
 # Permissões para storage e bootstrap/cache
 chown -R www-data:www-data storage bootstrap/cache
 chmod -R 775 storage bootstrap/cache
-chmod -R 777 .
+chmod -R 775 .
 chown -R www-data:www-data node_modules
-chmod -R 777 node_modules
+chmod -R 775 node_modules
+chown -R www-data:www-data storage/logs
+chmod -R 775 storage/logs
 
 # Verifica se o banco de dados está acessível
 until php artisan migrate --force; do
