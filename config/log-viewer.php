@@ -1,8 +1,6 @@
 <?php
 
-use Opcodes\LogViewer\Enums\FolderSortingMethod;
-use Opcodes\LogViewer\Enums\SortingOrder;
-use Opcodes\LogViewer\Enums\Theme;
+use Opcodes\LogViewer\Enums\{FolderSortingMethod, SortingOrder, Theme};
 
 return [
 
