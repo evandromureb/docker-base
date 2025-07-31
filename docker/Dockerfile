@@ -2,9 +2,9 @@ FROM php:8.4-fpm
 
 # Instala extensões necessárias
 RUN apt-get update && apt-get install -y \
-    libpng-dev libjpeg-dev libfreetype6-dev zip git unzip curl \
+    libpng-dev libjpeg-dev libfreetype6-dev libzip-dev zip git unzip curl \
     && docker-php-ext-configure gd --with-freetype --with-jpeg \
-    && docker-php-ext-install gd pdo pdo_mysql
+    && docker-php-ext-install gd pdo pdo_mysql zip
 
 # Instala Composer
 COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
