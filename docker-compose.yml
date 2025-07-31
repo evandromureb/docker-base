@@ -6,13 +6,17 @@ services:
         volumes:
             - ./:/var/www
             - ./docker/php.ini:/usr/local/etc/php/conf.d/custom.ini
-            - storage_data:/var/www/storage
         depends_on:
             - mysql
         environment:
             - APP_ENV=local
         networks:
-            - docker-project
+            - tall-stack
+    #        extra_hosts:
+    #            - 'host.docker.internal:host-gateway'
+    #        ports:
+    #            - '${APP_PORT:-8080}:80'
+    #            - '${VITE_PORT:-5173}:${VITE_PORT:-5173}'
 
     nginx:
         image: nginx:latest
@@ -24,10 +28,10 @@ services:
         depends_on:
             - php
         networks:
-            - docker-project
+            - tall-stack
 
     mysql:
-        image: mysql:8
+        image: mysql:8.0
         environment:
             MYSQL_DATABASE: ${DB_DATABASE:-laravel}
             MYSQL_ROOT_PASSWORD: ${DB_PASSWORD-laravel}
@@ -38,25 +42,24 @@ services:
         volumes:
             - db_data:/var/lib/mysql
         networks:
-            - docker-project
+            - tall-stack
 
     mailpit:
         image: axllent/mailpit:latest
         ports:
             - "8025:8025"
         networks:
-            - docker-project
+            - tall-stack
 
     redis:
         image: redis:latest
         ports:
             - "6379:6379"
         networks:
-            - docker-project
+            - tall-stack
 
 volumes:
     db_data:
-    storage_data:
 
 networks:
-    docker-project:
+    tall-stack:

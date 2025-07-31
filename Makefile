@@ -37,11 +37,25 @@ help: ## Mostra esta ajuda
 up: ## Inicia os containers em background
 	@echo "$(BLUE)Iniciando containers...$(NC)"
 	$(COMPOSE) up -d
+	sleep 5
+	@echo "$(GREEN)Aguardando para geração das migrations!$(NC)"
+	@while ! $(COMPOSE) exec $(PHP_SERVICE) php artisan migrate:status; do \
+		echo "$(YELLOW)Aguardando migrações...$(NC)"; \
+		sleep 5; \
+	done
+	$(MAKE) migrate
+	$(COMPOSE) exec $(PHP_SERVICE) git config --global --add safe.directory /var/www
+	@echo "$(BLUE)Atualizando dependências do Composer...$(NC)"
+	$(COMPOSE) exec $(PHP_SERVICE) composer update
+	@echo "$(BLUE)Instalando dependências do NPM...$(NC)"
+	$(COMPOSE) exec $(PHP_SERVICE) npm install
+	$(MAKE) permission
 
 .PHONY: upb
 upb: ## Inicia os containers com rebuild
 	@echo "$(BLUE)Iniciando containers com rebuild...$(NC)"
 	$(COMPOSE) up -d --build
+	$(MAKE) permission
 
 .PHONY: down
 down: ## Para os containers
@@ -302,12 +316,25 @@ top: ## Mostra uso de recursos dos containers
 .PHONY: dev-setup
 dev-setup: ## Configuração inicial para desenvolvimento
 	@echo "$(GREEN)Configurando ambiente de desenvolvimento...$(NC)"
+	$(MAKE) downv
 	$(MAKE) upb
+	$(MAKE) permission
+	$(COMPOSE) exec $(PHP_SERVICE) git config --global --add safe.directory /var/www
 	$(MAKE) composer-install
-	$(MAKE) npm-install
 	$(MAKE) key-generate
 	$(MAKE) storage-link
+
+	sleep 10
+	@echo "$(GREEN)Aguardando para geração das migrations!$(NC)"
+	@while ! $(COMPOSE) exec $(PHP_SERVICE) php artisan migrate:status; do \
+		echo "$(YELLOW)Aguardando migrações...$(NC)"; \
+		sleep 5; \
+	done
 	$(MAKE) migrate-fresh
+	$(MAKE) permission
+	$(MAKE) npm-install
+	$(COMPOSE) exec $(PHP_SERVICE) npm audit fix
+	$(MAKE) permission
 	@echo "$(GREEN)Ambiente configurado com sucesso!$(NC)"
 
 .PHONY: dev-reset
