@@ -6,47 +6,197 @@ NC='\033[0m'         # Sem cor
 BBlue='\033[1;34m'   # Azul negrito
 BRed='\033[1;31m'    # Vermelho negrito
 BGreen='\033[1;32m'  # Verde negrito
+BYellow='\033[1;33m' # Amarelo negrito
 
-# Definição do padrão regex para o ID da issue
-REGEX_ISSUE_ID="[a-zA-Z0-9,\.\_\-]+-[0-9]+"
+# Função para validar e sanitizar variáveis de ambiente
+validate_env_var() {
+    local var_name="$1"
+    local default_value="$2"
+    local pattern="$3"
+    
+    local value="${!var_name}"
+    if [ -z "$value" ]; then
+        value="$default_value"
+    fi
+    
+    # Valida se o valor segue o padrão esperado
+    if echo "$value" | grep -qE "$pattern"; then
+        echo "$value"
+    else
+        echo "$default_value"
+    fi
+}
 
-# Obtém o nome da branch atual
-BRANCH_NAME=$(git symbolic-ref --short HEAD 2>/dev/null || echo "")
+# Configurações validadas e seguras
+MIN_COMMIT_LENGTH=$(validate_env_var "MIN_COMMIT_LENGTH" "10" "^[0-9]{1,3}$")
+MAX_COMMIT_LENGTH=$(validate_env_var "MAX_COMMIT_LENGTH" "72" "^[0-9]{1,3}$")
+REGEX_ISSUE_ID=$(validate_env_var "REGEX_ISSUE_ID" "[A-Z]{2,8}-[0-9]{1,6}" "^[A-Z0-9\[\]\{\}\(\)\-\+\.\*\+\?\|]{1,50}$")
+ALLOW_MANUAL_ID=$(validate_env_var "ALLOW_MANUAL_ID" "true" "^(true|false)$")
 
-if [ -z "$BRANCH_NAME" ]; then
-    echo -e "${BRed}Erro ao obter o nome da branch atual.${NC}"
-    echo -e "${BBlue}Você pode usar ${BRed}git commit -m \"sua mensagem\" --no-verify${BBlue} para ignorar este hook.${NC}"
-    exit 1
-fi
+# Função para sanitizar strings para output seguro
+sanitize_output() {
+    local str="$1"
+    # Remove caracteres de controle e caracteres perigosos
+    echo "$str" | tr -cd '[:print:]\n' | sed 's/[\\`$"'\'']/\\&/g'
+}
 
-# Extrai o ID da issue do nome da branch
-ISSUE_ID=$(echo "$BRANCH_NAME" | grep -o -E "$REGEX_ISSUE_ID" | head -1 || echo "")
+# Função para logging simples e seguro
+log_info() {
+    local message=$(sanitize_output "$1")
+    echo -e "${BBlue}[INFO]${NC} $message"
+}
 
-if [ -z "$ISSUE_ID" ]; then
-    echo -e "${BRed}ERRO: A branch não possui o código de identificação no formato adequado.${NC}"
-    echo -e "${BBlue}O nome da branch deve conter um identificador no formato 'projeto-123'.${NC}"
-    echo -e "${BBlue}Branch atual: ${BRed}$BRANCH_NAME${NC}"
-    echo -e "${BBlue}Para ignorar esta verificação: ${BRed}git commit -m \"sua mensagem\" --no-verify${NC}"
-    exit 1
-fi
+log_success() {
+    local message=$(sanitize_output "$1")
+    echo -e "${BGreen}[SUCCESS]${NC} $message"
+}
 
-# Converter o ID para maiúsculas
-PREFIX=$(echo "$ISSUE_ID" | tr '[:lower:]' '[:upper:]')
+log_warning() {
+    local message=$(sanitize_output "$1")
+    echo -e "${BYellow}[WARNING]${NC} $message"
+}
+
+log_error() {
+    local message=$(sanitize_output "$1")
+    echo -e "${BRed}[ERROR]${NC} $message"
+}
+
+# Função para mostrar ajuda concisa e segura
+show_help() {
+    local safe_regex=$(sanitize_output "$REGEX_ISSUE_ID")
+    echo -e "${BBlue}Uso:${NC}"
+    echo -e "  git commit -m \"sua mensagem\""
+    echo -e "  git commit -m \"PROJ-123: sua mensagem\" (ID manual)"
+    echo -e ""
+    echo -e "${BBlue}Para ignorar:${NC}"
+    echo -e "  git commit --no-verify"
+    echo -e ""
+    echo -e "${BBlue}Formato do ID:${NC}"
+    echo -e "  $safe_regex (ex: PROJ-123, FEAT-456)"
+}
+
+# Função para validar ID de issue de forma segura
+validate_issue_id() {
+    local id="$1"
+    # Sanitiza entrada para evitar injeção
+    local sanitized_id=$(echo "$id" | tr -cd 'A-Z0-9-')
+    
+    # Valida se o ID não está vazio e segue o padrão
+    if [ -n "$sanitized_id" ] && echo "$sanitized_id" | grep -qE "^$REGEX_ISSUE_ID$"; then
+        return 0
+    fi
+    return 1
+}
+
+# Função para extrair ID da mensagem de forma segura
+extract_manual_id() {
+    local msg="$1"
+    # Sanitiza a mensagem antes de processar
+    local sanitized_msg=$(echo "$msg" | tr -cd '[:print:]\n')
+    
+    # Extrai apenas o primeiro ID válido encontrado
+    local id=$(echo "$sanitized_msg" | grep -oE "^$REGEX_ISSUE_ID:" | head -1 | sed 's/://')
+    echo "$id"
+}
+
+# Função para obter nome da branch de forma segura
+get_branch_name() {
+    local branch_name
+    branch_name=$(git symbolic-ref --short HEAD 2>/dev/null || echo "")
+    
+    # Sanitiza o nome da branch
+    if [ -n "$branch_name" ]; then
+        echo "$branch_name" | tr -cd '[:print:]\n'
+    else
+        echo ""
+    fi
+}
 
 # Verifica se o arquivo da mensagem existe
 if [ ! -f "$1" ]; then
-    echo -e "${BRed}ERRO: Arquivo de mensagem de commit não encontrado.${NC}"
+    log_error "Arquivo de mensagem não encontrado."
     exit 1
 fi
 
-# Lê a mensagem de commit atual
-COMMIT_MSG=$(cat "$1")
+# Obtém o nome da branch atual de forma segura
+BRANCH_NAME=$(get_branch_name)
 
-# Verifica se a mensagem já começa com o ID (para evitar duplicação)
-if echo "$COMMIT_MSG" | grep -q "^$PREFIX: "; then
-    echo -e "${BGreen}ID da issue já presente na mensagem de commit. Mantendo como está.${NC}"
-else
-    # Adiciona o prefixo à mensagem de commit
-    echo "$PREFIX: $COMMIT_MSG" > "$1"
-    echo -e "${BGreen}ID da issue ${PREFIX} adicionado à mensagem de commit.${NC}"
+if [ -z "$BRANCH_NAME" ]; then
+    log_error "Erro ao obter nome da branch."
+    exit 1
 fi
+
+# Lê a mensagem de commit de forma segura
+if [ -r "$1" ]; then
+    COMMIT_MSG=$(cat "$1" 2>/dev/null || echo "")
+else
+    log_error "Não é possível ler o arquivo de mensagem."
+    exit 1
+fi
+
+# Validação básica de tamanho
+if [ ${#COMMIT_MSG} -lt $MIN_COMMIT_LENGTH ]; then
+    log_error "Mensagem muito curta (${#COMMIT_MSG} chars). Mínimo: $MIN_COMMIT_LENGTH"
+    show_help
+    exit 1
+fi
+
+if [ ${#COMMIT_MSG} -gt $MAX_COMMIT_LENGTH ]; then
+    log_warning "Mensagem muito longa (${#COMMIT_MSG} chars). Máximo: $MAX_COMMIT_LENGTH"
+fi
+
+# Tenta extrair ID da mensagem primeiro (se permitido)
+MANUAL_ID=""
+if [ "$ALLOW_MANUAL_ID" = "true" ]; then
+    MANUAL_ID=$(extract_manual_id "$COMMIT_MSG")
+    if [ -n "$MANUAL_ID" ] && validate_issue_id "$MANUAL_ID"; then
+        log_success "ID manual: $MANUAL_ID"
+        PREFIX=$(echo "$MANUAL_ID" | tr '[:lower:]' '[:upper:]')
+    else
+        MANUAL_ID=""
+    fi
+fi
+
+# Se não encontrou ID manual, tenta extrair da branch
+if [ -z "$MANUAL_ID" ]; then
+    ISSUE_ID=$(echo "$BRANCH_NAME" | grep -oE "$REGEX_ISSUE_ID" | head -1 || echo "")
+    
+    if [ -z "$ISSUE_ID" ]; then
+        local safe_branch=$(sanitize_output "$BRANCH_NAME")
+        log_error "Branch '$safe_branch' não possui ID válido."
+        log_info "Use: PROJ-123: sua mensagem"
+        show_help
+        exit 1
+    fi
+    
+    log_info "ID da branch: $ISSUE_ID"
+    PREFIX=$(echo "$ISSUE_ID" | tr '[:lower:]' '[:upper:]')
+fi
+
+# Verifica se a mensagem já contém o ID
+if echo "$COMMIT_MSG" | grep -q "^$PREFIX:"; then
+    log_success "ID já presente. Mantendo mensagem."
+else
+    # Remove IDs existentes no início de forma segura
+    CLEAN_MSG=$(echo "$COMMIT_MSG" | sed -E "s/^$REGEX_ISSUE_ID: //")
+    
+    # Adiciona o prefixo
+    NEW_COMMIT_MSG="$PREFIX: $CLEAN_MSG"
+    
+    # Verifica tamanho final
+    if [ ${#NEW_COMMIT_MSG} -gt $MAX_COMMIT_LENGTH ]; then
+        log_warning "Mensagem final excede limite (${#NEW_COMMIT_MSG} chars)."
+    fi
+    
+    # Escreve o arquivo de forma segura
+    if echo "$NEW_COMMIT_MSG" > "$1" 2>/dev/null; then
+        log_success "ID $PREFIX adicionado."
+    else
+        log_error "Erro ao escrever arquivo de mensagem."
+        exit 1
+    fi
+fi
+
+# Mostra a mensagem final de forma segura
+local final_msg=$(cat "$1" 2>/dev/null || echo "Erro ao ler mensagem final")
+log_info "Commit: $(sanitize_output "$final_msg")"

@@ -1,65 +1,596 @@
 #!/usr/bin/env sh
 set -e
 
+# Configuração
+TIMEOUT_SECONDS=300  # 5 minutos de timeout
+CACHE_DIR=".husky/cache"
+CONFIG_FILE=".husky/pre-push.config"
+AUDIT_LOG=".husky/audit.log"
+
 # Cores para feedback visual
 NC='\033[0m'         # Sem cor
 BBlue='\033[1;34m'   # Azul negrito
 BRed='\033[1;31m'    # Vermelho negrito
 BGreen='\033[1;32m'  # Verde negrito
 BYellow='\033[1;33m' # Amarelo negrito
+BCyan='\033[1;36m'   # Ciano negrito
+BWhite='\033[1;37m'  # Branco negrito
 
-echo -e "${BBlue}Executando verificações pre-push...${NC}"
+# Lista de comandos permitidos (whitelist)
+ALLOWED_COMMANDS=(
+    "npx"
+    "php"
+    "composer"
+    "git"
+    "node"
+    "npm"
+    "yarn"
+    "pint"
+    "phpstan"
+    "php-cs-fixer"
+    "security-checker"
+    "artisan"
+    "test"
+    "lint-staged"
+)
 
-## Executar lint-staged
-#echo -e "${BYellow}Executando lint-staged...${NC}"
-#npx lint-staged
-#if [ $? -ne 0 ]; then
-#    echo -e "${BRed}❌ Falha ao executar lint-staged${NC}"
-#    exit 1
-#fi
-#echo -e "${BGreen}✅ lint-staged concluído com sucesso${NC}"
+# Lista de caracteres perigosos
+DANGEROUS_CHARS=';&|`$(){}[]<>\\'
 
-# Rodar o phpstan (descomentado e com tratamento de erro)
-echo -e "${BYellow}Executando PHPStan...${NC}"
-if [ -f "./vendor/bin/phpstan" ]; then
-    ./vendor/bin/phpstan
-    if [ $? -ne 0 ]; then
-        echo -e "${BRed}❌ Falha na análise do PHPStan. Por favor corrija os erros antes de continuar.${NC}"
+# Função para sanitizar strings (proteção contra injeção)
+sanitize_string() {
+    local input="$1"
+    # Remove caracteres perigosos
+    echo "$input" | sed 's/[;&|`$(){}[\]<>]/_/g' | sed 's/\.\./_/g'
+}
+
+# Função para validar caminhos de arquivo
+validate_file_path() {
+    local path="$1"
+    local base_dir="$2"
+    
+    # Verificar se o caminho contém path traversal
+    if echo "$path" | grep -q "\.\."; then
+        return 1
+    fi
+    
+    # Verificar se o caminho está dentro do diretório base
+    local real_path=$(realpath "$path" 2>/dev/null || echo "$path")
+    local real_base=$(realpath "$base_dir" 2>/dev/null || echo "$base_dir")
+    
+    if [[ "$real_path" == "$real_base"* ]]; then
+        return 0
+    fi
+    
+    return 1
+}
+
+# Função para validar e sanitizar cache key
+validate_cache_key() {
+    local cache_key="$1"
+    
+    # Permitir apenas caracteres seguros
+    if echo "$cache_key" | grep -qE '^[a-zA-Z0-9_-]+$'; then
+        echo "$cache_key"
+    else
+        # Sanitizar se não for válido
+        echo "$cache_key" | sed 's/[^a-zA-Z0-9_-]/_/g'
+    fi
+}
+
+# Função para validar comando (whitelist)
+validate_command() {
+    local command="$1"
+    local base_cmd=$(echo "$command" | awk '{print $1}')
+    
+    # Verificar se o comando base está na whitelist
+    for allowed in "${ALLOWED_COMMANDS[@]}"; do
+        if [[ "$base_cmd" == "$allowed" ]]; then
+            return 0
+        fi
+    done
+    
+    return 1
+}
+
+# Função para logging de auditoria
+audit_log() {
+    local action="$1"
+    local details="$2"
+    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    local user=$(whoami 2>/dev/null || echo "unknown")
+    local hostname=$(hostname 2>/dev/null || echo "unknown")
+    
+    echo "[$timestamp] USER:$user HOST:$hostname ACTION:$action DETAILS:$details" >> "$AUDIT_LOG"
+}
+
+# Função para executar comando com validação de segurança
+run_command_safe() {
+    local description="$1"
+    local command="$2"
+    local skip_on_failure="${3:-false}"
+    local timeout="${4:-$TIMEOUT_SECONDS}"
+    
+    # Log de auditoria
+    audit_log "COMMAND_EXECUTION" "Description: $description, Command: $command"
+    
+    # Validar se o comando contém caracteres perigosos
+    if echo "$command" | grep -qE '[;&|`$(){}[\]<>\\]'; then
+        log "ERROR" "❌ Comando rejeitado por segurança: $command"
+        audit_log "SECURITY_VIOLATION" "Dangerous characters in command: $command"
+        return 1
+    fi
+    
+    # Validar comando na whitelist
+    if ! validate_command "$command"; then
+        log "ERROR" "❌ Comando não autorizado: $command"
+        audit_log "SECURITY_VIOLATION" "Unauthorized command: $command"
+        return 1
+    fi
+    
+    log "INFO" "🚀 Executando $description..."
+    
+    # Executar comando com timeout e validação
+    if timeout "$timeout" sh -c "$command"; then
+        log "SUCCESS" "✅ $description concluído com sucesso"
+        audit_log "COMMAND_SUCCESS" "Description: $description"
+        return 0
+    else
+        local exit_code=$?
+        if [ $exit_code -eq 124 ]; then
+            log "ERROR" "⏰ $description excedeu o timeout de ${timeout}s"
+            audit_log "COMMAND_TIMEOUT" "Description: $description, Timeout: ${timeout}s"
+        else
+            log "ERROR" "❌ $description falhou com código de saída: $exit_code"
+            audit_log "COMMAND_FAILURE" "Description: $description, Exit code: $exit_code"
+        fi
+        
+        if [ "$skip_on_failure" = "true" ]; then
+            log "WARN" "⚠️ $description falhou, continuando..."
+            return 1
+        else
+            log "ERROR" "🛑 Falha em $description. Por favor corrija os erros antes de continuar."
+            exit 1
+        fi
+    fi
+}
+
+# Função para logging com timestamp
+log() {
+    local level="$1"
+    local message="$2"
+    local timestamp=$(date '+%H:%M:%S')
+    echo -e "[${timestamp}] ${level}: ${message}"
+}
+
+# Função para verificar se uma ferramenta está disponível
+check_tool() {
+    local tool_name="$1"
+    local tool_path="$2"
+    
+    # Validar caminho da ferramenta
+    if ! validate_file_path "$tool_path" "."; then
+        log "ERROR" "❌ Caminho da ferramenta inválido: $tool_path"
+        audit_log "SECURITY_VIOLATION" "Invalid tool path: $tool_path"
+        return 1
+    fi
+    
+    if [ -f "$tool_path" ]; then
+        log "INFO" "✅ $tool_name encontrado em: $tool_path"
+        return 0
+    else
+        log "WARN" "⚠️ $tool_name não encontrado em: $tool_path"
+        return 1
+    fi
+}
+
+# Função para executar comando com timeout e tratamento de erro (DEPRECATED - usar run_command_safe)
+run_command() {
+    log "WARN" "⚠️ run_command está deprecated. Use run_command_safe para melhor segurança."
+    run_command_safe "$@"
+}
+
+# Função para criar cache directory
+setup_cache() {
+    # Validar e criar diretório de cache de forma segura
+    if validate_file_path "$CACHE_DIR" "."; then
+        mkdir -p "$CACHE_DIR"
+        # Definir permissões restritivas
+        chmod 700 "$CACHE_DIR" 2>/dev/null || true
+        
+        # Criar arquivo de auditoria se não existir
+        touch "$AUDIT_LOG" 2>/dev/null || true
+        chmod 600 "$AUDIT_LOG" 2>/dev/null || true
+    else
+        log "ERROR" "❌ Caminho de cache inválido: $CACHE_DIR"
         exit 1
     fi
-    echo -e "${BGreen}✅ PHPStan concluído com sucesso${NC}"
-else
-    echo -e "${BYellow}⚠️ PHPStan não encontrado. Pulando verificação...${NC}"
-fi
+}
 
-# Rodar os testes (descomentado e com tratamento de erro)
-#echo -e "${BYellow}Executando testes...${NC}"
-#if [ -f "./artisan" ]; then
-#    php artisan test --parallel
-#    if [ $? -ne 0 ]; then
-#        echo -e "${BRed}❌ Falha nos testes. Por favor corrija os erros antes de continuar.${NC}"
-#        exit 1
-#    fi
-#    echo -e "${BGreen}✅ Testes concluídos com sucesso${NC}"
-#else
-#    echo -e "${BYellow}⚠️ Artisan não encontrado. Pulando testes...${NC}"
-#fi
-
-# Formatar os arquivos PHP alterados usando Laravel Pint
-echo -e "${BYellow}Formatando arquivos PHP alterados...${NC}"
-if [ -f "./vendor/bin/pint" ]; then
-    STAGED_FILES=$(git diff --cached --name-only --diff-filter=ACM | grep "\.php$") || true
-
-    if [ -n "$STAGED_FILES" ]; then
-        echo "$STAGED_FILES" | xargs ./vendor/bin/pint
-        echo "$STAGED_FILES" | xargs git add
-        echo -e "${BGreen}✅ Arquivos formatados com Laravel Pint${NC}"
-    else
-        echo -e "${BYellow}⚠️ Nenhum arquivo PHP alterado para formatar${NC}"
+# Função para verificar cache
+check_cache() {
+    local cache_key="$1"
+    local sanitized_key=$(validate_cache_key "$cache_key")
+    local cache_file="$CACHE_DIR/$sanitized_key"
+    
+    # Validar caminho do arquivo de cache
+    if ! validate_file_path "$cache_file" "$CACHE_DIR"; then
+        log "ERROR" "❌ Caminho de cache inválido: $cache_file"
+        return 1
     fi
-else
-    echo -e "${BYellow}⚠️ Laravel Pint não encontrado. Pulando formatação...${NC}"
-fi
+    
+    if [ -f "$cache_file" ]; then
+        local cache_age=$(($(date +%s) - $(stat -c %Y "$cache_file")))
+        # Cache válido por 1 hora
+        if [ $cache_age -lt 3600 ]; then
+            return 0
+        fi
+    fi
+    return 1
+}
 
-echo -e "${BGreen}🚀 Todas as verificações concluídas com sucesso!${NC}"
-exit 0
+# Função para atualizar cache
+update_cache() {
+    local cache_key="$1"
+    local sanitized_key=$(validate_cache_key "$cache_key")
+    local cache_file="$CACHE_DIR/$sanitized_key"
+    
+    # Validar caminho do arquivo de cache
+    if ! validate_file_path "$cache_file" "$CACHE_DIR"; then
+        log "ERROR" "❌ Caminho de cache inválido: $cache_file"
+        return 1
+    fi
+    
+    touch "$cache_file"
+    # Definir permissões restritivas
+    chmod 600 "$cache_file" 2>/dev/null || true
+}
+
+# Função para carregar configuração de forma segura
+load_config() {
+    if [ -f "$CONFIG_FILE" ]; then
+        # Validar caminho do arquivo de configuração
+        if ! validate_file_path "$CONFIG_FILE" "."; then
+            log "ERROR" "❌ Caminho de configuração inválido: $CONFIG_FILE"
+            exit 1
+        fi
+        
+        log "INFO" "📋 Carregando configuração de $CONFIG_FILE"
+        
+        # Carregar configuração de forma segura
+        while IFS='=' read -r key value; do
+            # Ignorar comentários e linhas vazias
+            [[ $key =~ ^[[:space:]]*# ]] && continue
+            [[ -z $key ]] && continue
+            
+            # Validar nome da variável
+            if [[ $key =~ ^[A-Z_][A-Z0-9_]*$ ]]; then
+                export "$key=$value"
+            else
+                log "WARN" "⚠️ Variável de configuração inválida ignorada: $key"
+                audit_log "CONFIG_WARNING" "Invalid config variable: $key"
+            fi
+        done < "$CONFIG_FILE"
+    else
+        log "INFO" "📋 Usando configuração padrão"
+        # Configurações padrão
+        ENABLE_LINT_STAGED=true
+        ENABLE_PHPSTAN=true
+        ENABLE_TESTS=true
+        ENABLE_PINT=true
+        ENABLE_CS_FIXER=true
+        ENABLE_SECURITY_CHECK=true
+        ENABLE_CACHE=true
+    fi
+}
+
+# Função para validar arquivos staged
+validate_staged_files() {
+    local staged_files="$1"
+    
+    echo "$staged_files" | while read file; do
+        # Validar se o arquivo não contém path traversal
+        if echo "$file" | grep -q "\.\."; then
+            log "ERROR" "❌ Arquivo com path traversal detectado: $file"
+            audit_log "SECURITY_VIOLATION" "Path traversal detected: $file"
+            return 1
+        fi
+        
+        # Validar se o arquivo existe e está dentro do repositório
+        if [ -f "$file" ]; then
+            if ! validate_file_path "$file" "."; then
+                log "ERROR" "❌ Arquivo fora do repositório detectado: $file"
+                audit_log "SECURITY_VIOLATION" "File outside repository: $file"
+                return 1
+            fi
+        else
+            log "WARN" "⚠️ Arquivo não encontrado: $file"
+        fi
+    done
+    
+    return 0
+}
+
+# Função para mostrar resumo de arquivos
+show_staged_files() {
+    local staged_files=$(git diff --cached --name-only)
+    local count=$(echo "$staged_files" | wc -l)
+    
+    if [ "$count" -gt 0 ]; then
+        # Validar arquivos staged antes de processar
+        if ! validate_staged_files "$staged_files"; then
+            log "ERROR" "❌ Arquivos staged inválidos detectados"
+            exit 1
+        fi
+        
+        log "INFO" "📋 Encontrados $count arquivo(s) staged para verificação:"
+        echo "$staged_files" | while read file; do
+            echo -e "  📄 $file"
+        done
+    else
+        log "INFO" "📋 Nenhum arquivo staged encontrado"
+        log "INFO" "💡 Dica: Use 'git add <arquivos>' para adicionar arquivos ao staging"
+        return 1
+    fi
+}
+
+# Função para verificar dependências
+check_dependencies() {
+    log "INFO" "🔍 Verificando dependências..."
+    
+    # Verificar dependências PHP
+    if [ -f "./composer.json" ]; then
+        if [ ! -d "./vendor" ]; then
+            log "ERROR" "❌ Dependências PHP não instaladas"
+            log "INFO" "💡 Execute: composer install"
+            exit 1
+        fi
+        log "SUCCESS" "✅ Dependências PHP verificadas"
+    fi
+    
+    # Verificar dependências Node.js
+    if [ -f "./package.json" ]; then
+        if [ ! -d "./node_modules" ]; then
+            log "WARN" "⚠️ Dependências Node.js não instaladas"
+            log "INFO" "💡 Execute: npm install"
+        else
+            log "SUCCESS" "✅ Dependências Node.js verificadas"
+        fi
+    fi
+}
+
+# Função principal de verificações
+run_checks() {
+    local staged_files=$(git diff --cached --name-only)
+    
+    if [ -z "$staged_files" ]; then
+        log "INFO" "📋 Nenhum arquivo staged para verificação"
+        log "INFO" "💡 Hook executado com sucesso - não há arquivos para verificar"
+        return 0
+    fi
+    
+    show_staged_files
+    
+    # 1. Executar lint-staged
+    if [ "$ENABLE_LINT_STAGED" = "true" ] && check_tool "lint-staged" "./node_modules/.bin/lint-staged"; then
+        if check_cache "lint-staged"; then
+            log "INFO" "⚡ Usando cache para lint-staged"
+        else
+            run_command_safe "lint-staged" "npx lint-staged" false 120
+            [ "$ENABLE_CACHE" = "true" ] && update_cache "lint-staged"
+        fi
+    else
+        log "WARN" "⚠️ lint-staged não disponível ou desabilitado"
+    fi
+    
+    # 2. Verificar dependências
+    check_dependencies
+    
+    # 3. Executar PHPStan
+    if [ "$ENABLE_PHPSTAN" = "true" ] && check_tool "PHPStan" "./vendor/bin/phpstan"; then
+        local php_files=$(echo "$staged_files" | grep "\.php$" | tr '\n' ' ')
+        
+        if [ -n "$php_files" ]; then
+            log "INFO" "📄 Analisando arquivos PHP com PHPStan..."
+            echo "$php_files" | tr ' ' '\n' | while read file; do
+                echo -e "  📄 $file"
+            done
+            
+            if check_cache "phpstan"; then
+                log "INFO" "⚡ Usando cache para PHPStan"
+            else
+                run_command_safe "análise PHPStan" "./vendor/bin/phpstan analyse $php_files" false 180
+                [ "$ENABLE_CACHE" = "true" ] && update_cache "phpstan"
+            fi
+        else
+            log "INFO" "📄 Nenhum arquivo PHP alterado para análise"
+        fi
+    fi
+    
+    # 4. Executar testes
+    if [ "$ENABLE_TESTS" = "true" ] && check_tool "Artisan" "./artisan"; then
+        if [ -d "./tests" ] || [ -d "./tests/Unit" ] || [ -d "./tests/Feature" ]; then
+            if check_cache "tests"; then
+                log "INFO" "⚡ Usando cache para testes"
+            else
+                if php artisan test --help | grep -q "parallel"; then
+                    run_command_safe "testes em paralelo" "php artisan test --parallel" false 240
+                else
+                    run_command_safe "testes" "php artisan test" false 240
+                fi
+                [ "$ENABLE_CACHE" = "true" ] && update_cache "tests"
+            fi
+        else
+            log "WARN" "⚠️ Nenhum teste encontrado"
+        fi
+    fi
+    
+    # 5. Formatar arquivos PHP com Laravel Pint
+    if [ "$ENABLE_PINT" = "true" ] && check_tool "Laravel Pint" "./vendor/bin/pint"; then
+        local staged_php_files=$(echo "$staged_files" | grep "\.php$" | tr '\n' ' ')
+        
+        if [ -n "$staged_php_files" ]; then
+            log "INFO" "🎨 Formatando arquivos PHP com Laravel Pint..."
+            echo "$staged_php_files" | tr ' ' '\n' | while read file; do
+                echo -e "  🎨 $file"
+            done
+            
+            if echo "$staged_php_files" | xargs ./vendor/bin/pint; then
+                echo "$staged_php_files" | xargs git add
+                log "SUCCESS" "✅ Arquivos formatados com Laravel Pint"
+            else
+                log "ERROR" "❌ Erro na formatação com Laravel Pint"
+                exit 1
+            fi
+        else
+            log "INFO" "🎨 Nenhum arquivo PHP alterado para formatar"
+        fi
+    fi
+    
+    # 6. PHP CS Fixer (opcional)
+    if [ "$ENABLE_CS_FIXER" = "true" ] && check_tool "PHP CS Fixer" "./vendor/bin/php-cs-fixer"; then
+        local staged_php_files=$(echo "$staged_files" | grep "\.php$" | tr '\n' ' ')
+        
+        if [ -n "$staged_php_files" ]; then
+            run_command_safe "verificação PHP CS Fixer" "echo \"$staged_php_files\" | xargs ./vendor/bin/php-cs-fixer fix --dry-run --diff" true 60
+        fi
+    fi
+    
+    # 7. Verificação de segurança
+    if [ "$ENABLE_SECURITY_CHECK" = "true" ]; then
+        # Verificar vulnerabilidades no composer.lock
+        if check_tool "PHP Security Checker" "./vendor/bin/security-checker"; then
+            run_command_safe "verificação de segurança" "./vendor/bin/security-checker security:check composer.lock" true 60
+        fi
+        
+        # Verificar arquivos PHP por vulnerabilidades comuns
+        local php_files=$(echo "$staged_files" | grep "\.php$" | tr '\n' ' ')
+        if [ -n "$php_files" ]; then
+            log "INFO" "🔒 Verificando vulnerabilidades de segurança em arquivos PHP..."
+            
+            # Verificar por funções perigosas
+            echo "$php_files" | tr ' ' '\n' | while read file; do
+                if [ -f "$file" ]; then
+                    # Verificar funções perigosas
+                    local dangerous_functions=$(grep -n "eval\|exec\|system\|shell_exec\|passthru\|popen\|proc_open" "$file" 2>/dev/null || true)
+                    if [ -n "$dangerous_functions" ]; then
+                        log "WARN" "⚠️ Funções perigosas encontradas em $file:"
+                        echo "$dangerous_functions" | while read line; do
+                            echo -e "    ⚠️ $line"
+                        done
+                        audit_log "SECURITY_WARNING" "Dangerous functions in $file"
+                    fi
+                    
+                    # Verificar por SQL injection patterns
+                    local sql_patterns=$(grep -n "SELECT.*\$_GET\|SELECT.*\$_POST\|SELECT.*\$_REQUEST" "$file" 2>/dev/null || true)
+                    if [ -n "$sql_patterns" ]; then
+                        log "WARN" "⚠️ Possível SQL injection detectado em $file:"
+                        echo "$sql_patterns" | while read line; do
+                            echo -e "    ⚠️ $line"
+                        done
+                        audit_log "SECURITY_WARNING" "Possible SQL injection in $file"
+                    fi
+                fi
+            done
+        fi
+        
+        # Verificar por credenciais expostas
+        local sensitive_files=$(echo "$staged_files" | grep -E "\.(env|config|ini|json|xml|yml|yaml)$" | tr '\n' ' ')
+        if [ -n "$sensitive_files" ]; then
+            log "INFO" "🔒 Verificando por credenciais expostas..."
+            echo "$sensitive_files" | tr ' ' '\n' | while read file; do
+                if [ -f "$file" ]; then
+                    # Verificar por padrões de credenciais
+                    local credentials=$(grep -n -i "password\|secret\|key\|token\|api_key" "$file" 2>/dev/null || true)
+                    if [ -n "$credentials" ]; then
+                        log "WARN" "⚠️ Possíveis credenciais encontradas em $file:"
+                        echo "$credentials" | while read line; do
+                            echo -e "    ⚠️ $line"
+                        done
+                        audit_log "SECURITY_WARNING" "Possible credentials in $file"
+                    fi
+                fi
+            done
+        fi
+    fi
+}
+
+# Função para mostrar resumo final
+show_summary() {
+    log "SUCCESS" "🎉 Todas as verificações pre-push concluídas com sucesso!"
+    echo -e "${BCyan}📊 Resumo das verificações:${NC}"
+    echo -e "  ✅ lint-staged (${ENABLE_LINT_STAGED:-true})"
+    echo -e "  ✅ Dependências verificadas"
+    echo -e "  ✅ PHPStan (${ENABLE_PHPSTAN:-true})"
+    echo -e "  ✅ Testes (${ENABLE_TESTS:-true})"
+    echo -e "  ✅ Laravel Pint (${ENABLE_PINT:-true})"
+    echo -e "  ✅ PHP CS Fixer (${ENABLE_CS_FIXER:-true})"
+    echo -e "  ✅ Verificação de segurança (${ENABLE_SECURITY_CHECK:-true})"
+    echo -e "  ✅ Cache (${ENABLE_CACHE:-true})"
+}
+
+# Função para verificar integridade do repositório
+check_repository_integrity() {
+    log "INFO" "🔍 Verificando integridade do repositório..."
+    
+    # Verificar se estamos em um repositório Git válido
+    if ! git rev-parse --git-dir > /dev/null 2>&1; then
+        log "ERROR" "❌ Erro: Não estamos em um repositório Git"
+        exit 1
+    fi
+    
+    # Verificar se o repositório não está corrompido
+    if ! git fsck --no-dangling > /dev/null 2>&1; then
+        log "ERROR" "❌ Repositório Git corrompido detectado"
+        exit 1
+    fi
+    
+    # Verificar se há commits órfãos
+    local orphan_commits=$(git log --all --grep="^$" --oneline 2>/dev/null | wc -l)
+    if [ "$orphan_commits" -gt 0 ]; then
+        log "WARN" "⚠️ Encontrados $orphan_commits commit(s) órfão(s)"
+    fi
+    
+    # Verificar permissões de arquivos sensíveis
+    local sensitive_files=(".env" ".env.example" "composer.lock" "package-lock.json")
+    for file in "${sensitive_files[@]}"; do
+        if [ -f "$file" ]; then
+            local perms=$(stat -c %a "$file" 2>/dev/null || echo "000")
+            if [ "$perms" != "600" ] && [ "$perms" != "644" ]; then
+                log "WARN" "⚠️ Permissões muito abertas em $file: $perms"
+                audit_log "SECURITY_WARNING" "Open permissions on $file: $perms"
+            fi
+        fi
+    done
+    
+    log "SUCCESS" "✅ Integridade do repositório verificada"
+}
+
+# Início do script
+main() {
+    log "INFO" "🚀 Iniciando verificações pre-push..."
+    audit_log "HOOK_START" "Pre-push hook initiated"
+    
+    # Verificar integridade do repositório
+    check_repository_integrity
+    
+    # Configurar cache
+    setup_cache
+    
+    # Carregar configuração
+    load_config
+    
+    # Executar verificações
+    if run_checks; then
+        show_summary
+        audit_log "HOOK_SUCCESS" "All checks passed successfully"
+        exit 0
+    else
+        log "ERROR" "❌ Algumas verificações falharam"
+        audit_log "HOOK_FAILURE" "Some checks failed"
+        exit 1
+    fi
+}
+
+# Executar função principal
+main "$@"
