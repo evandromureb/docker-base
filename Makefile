@@ -37,11 +37,13 @@ help: ## Mostra esta ajuda
 up: ## Inicia os containers em background
 	@echo "$(BLUE)Iniciando containers...$(NC)"
 	$(COMPOSE) up -d
+	$(MAKE) permission
 
 .PHONY: upb
 upb: ## Inicia os containers com rebuild
 	@echo "$(BLUE)Iniciando containers com rebuild...$(NC)"
 	$(COMPOSE) up -d --build
+	$(MAKE) permission
 
 .PHONY: down
 down: ## Para os containers
@@ -302,12 +304,22 @@ top: ## Mostra uso de recursos dos containers
 .PHONY: dev-setup
 dev-setup: ## Configuração inicial para desenvolvimento
 	@echo "$(GREEN)Configurando ambiente de desenvolvimento...$(NC)"
+	$(MAKE) downv
 	$(MAKE) upb
+	$(MAKE) permission
 	$(MAKE) composer-install
 	$(MAKE) npm-install
 	$(MAKE) key-generate
 	$(MAKE) storage-link
+
+	sleep 10
+	@echo "$(GREEN)Aguardando para geração das migrations!$(NC)"
+	@while ! $(COMPOSE) exec $(PHP_SERVICE) php artisan migrate:status; do \
+		echo "$(YELLOW)Aguardando migrações...$(NC)"; \
+		sleep 5; \
+	done
 	$(MAKE) migrate-fresh
+	$(MAKE) permission
 	@echo "$(GREEN)Ambiente configurado com sucesso!$(NC)"
 
 .PHONY: dev-reset

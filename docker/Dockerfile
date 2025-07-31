@@ -15,12 +15,12 @@ RUN apt-get update && apt-get install -y \
     && docker-php-ext-install gd pdo pdo_mysql zip \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
-    
+
 RUN curl -fsSL https://deb.nodesource.com/setup_18.x | bash - \
     && apt-get install -y nodejs \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
-    
+
 COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
 
 COPY docker/php.ini /usr/local/etc/php/conf.d/custom.ini
@@ -39,7 +39,7 @@ RUN chown -R appuser:appuser /var/www \
     && mkdir -p /var/www/bootstrap/cache \
     && chmod -R 775 /var/www/storage \
     && chmod -R 775 /var/www/bootstrap/cache
-    
+
 USER appuser
 
 RUN composer install --no-dev --optimize-autoloader --no-interaction \
@@ -60,7 +60,7 @@ RUN apt-get update && apt-get install -y \
     && apt-get install -y nodejs \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
-    
+
 RUN groupadd -r appuser && useradd -r -g appuser appuser \
     && echo "appuser ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
 
@@ -88,6 +88,11 @@ RUN chmod +x /entrypoint.sh \
     && chmod -R 775 /var/www/storage/logs \
     && touch /var/www/storage/logs/laravel.log \
     && chown -R appuser:appuser /var/www/storage/logs
+
+
+
+RUN mkdir -p /home/appuser && chown -R appuser:appuser /home/appuser
+RUN chown -R appuser:appuser /var/www/node_modules
 
 WORKDIR /var/www
 
