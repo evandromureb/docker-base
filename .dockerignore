@@ -1,0 +1,46 @@
+# Dependências
+node_modules
+vendor
+npm-debug.log
+yarn-error.log
+
+# Arquivos de ambiente
+.env
+.env.local
+.env.production
+.env.staging
+
+# Logs
+storage/logs/*
+!storage/logs/.gitkeep
+
+# Cache
+storage/framework/cache/*
+!storage/framework/cache/.gitkeep
+storage/framework/sessions/*
+!storage/framework/sessions/.gitkeep
+storage/framework/views/*
+!storage/framework/views/.gitkeep
+
+# Bootstrap cache
+bootstrap/cache/*
+!bootstrap/cache/.gitkeep
+
+# Arquivos de desenvolvimento
+.git
+.gitignore
+README.md
+docker-compose.yml
+docker-compose.override.yml
+Dockerfile
+.dockerignore
+
+# IDEs
+.vscode
+.idea
+*.swp
+*.swo
+
+# Sistema
+.DS_Store
+Thumbs.db 
