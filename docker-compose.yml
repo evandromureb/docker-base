@@ -4,33 +4,19 @@ services:
             context: .
             dockerfile: docker/Dockerfile
         volumes:
-            - ./app:/var/www/app
-            - ./bootstrap:/var/www/bootstrap
-            - ./config:/var/www/config
-            - ./database:/var/www/database
-            - ./lang:/var/www/lang
-            - ./public:/var/www/public
-            - ./resources:/var/www/resources
-            - ./routes:/var/www/routes
-            - ./storage:/var/www/storage
-            - ./tests:/var/www/tests
-            - ./artisan:/var/www/artisan
-            - ./composer.json:/var/www/composer.json
-            - ./composer.lock:/var/www/composer.lock
-            - ./package.json:/var/www/package.json
-            - ./package-lock.json:/var/www/package-lock.json
-            - ./vite.config.js:/var/www/vite.config.js
-            - ./tailwind.config.js:/var/www/tailwind.config.js
-            - ./postcss.config.js:/var/www/postcss.config.js
+            - ./:/var/www
             - ./docker/php.ini:/usr/local/etc/php/conf.d/custom.ini
-            - storage_data:/var/www/storage
-            - vendor_data:/var/www/vendor
         depends_on:
             - mysql
         environment:
             - APP_ENV=local
         networks:
-            - metronic
+            - docker-project
+#        extra_hosts:
+#            - 'host.docker.internal:host-gateway'
+#        ports:
+#            - '${APP_PORT:-8080}:80'
+#            - '${VITE_PORT:-5173}:${VITE_PORT:-5173}'
 
     nginx:
         image: nginx:latest
@@ -42,10 +28,10 @@ services:
         depends_on:
             - php
         networks:
-            - metronic
+            - docker-project
 
     mysql:
-        image: mysql:8
+        image: mysql:latest
         environment:
             MYSQL_DATABASE: ${DB_DATABASE:-laravel}
             MYSQL_ROOT_PASSWORD: ${DB_PASSWORD-laravel}
@@ -56,26 +42,24 @@ services:
         volumes:
             - db_data:/var/lib/mysql
         networks:
-            - metronic
+            - docker-project
 
     mailpit:
         image: axllent/mailpit:latest
         ports:
             - "8025:8025"
         networks:
-            - metronic
+            - docker-project
 
     redis:
         image: redis:latest
         ports:
             - "6379:6379"
         networks:
-            - metronic
+            - docker-project
 
 volumes:
     db_data:
-    storage_data:
-    vendor_data:
 
 networks:
-    metronic:
+    docker-project:
